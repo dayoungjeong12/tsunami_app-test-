@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
-import koreanize_matplotlib
+import numpy as np
 
 # -----------------------------------------------------------------------------
 # 1. 앱 설정 및 제목
@@ -18,12 +18,30 @@ st.markdown("""
 """)
 
 # -----------------------------------------------------------------------------
-# 2. 데이터 로드 및 모델 학습 (캐싱 기능 사용으로 속도 최적화)
+# 2. 한글 폰트 설정 (⭐수정된 부분: koreanize_matplotlib 대신 직접 설정⭐)
+# Streamlit Cloud 환경에서 Matplotlib 한글 깨짐을 방지합니다.
+# -----------------------------------------------------------------------------
+try:
+    # Streamlit Cloud에서 NanumGothic을 사용하도록 설정
+    plt.rcParams['font.family'] = 'NanumGothic'
+except:
+    # NanumGothic이 없을 경우 fallback
+    plt.rcParams['font.family'] = 'sans-serif' 
+    st.warning("경고: Streamlit Cloud 환경에서 한글 폰트 설정에 문제가 있을 수 있습니다.")
+
+plt.rcParams['axes.unicode_minus'] = False  # 마이너스 기호 깨짐 방지
+
+# -----------------------------------------------------------------------------
+# 3. 데이터 로드 및 모델 학습 (캐싱 기능 사용)
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_data():
     # 데이터 불러오기 (파일 경로가 같은 디렉토리에 있다고 가정)
-    df = pd.read_csv("earthquake_data_tsunami.csv")
+    try:
+        df = pd.read_csv("earthquake_data_tsunami.csv")
+    except FileNotFoundError:
+        st.error("❌ 'earthquake_data_tsunami.csv' 파일을 찾을 수 없습니다.")
+        st.stop()
     return df
 
 @st.cache_resource
@@ -43,30 +61,40 @@ def train_model(df):
     y_pred = model.predict(X_test)
     acc = accuracy_score(y_test, y_pred)
     
-    return model, acc, X.columns
+    return model, acc, X.columns.tolist()
 
 # 데이터 로드 및 학습 실행
-try:
-    df = load_data()
-    model, accuracy, feature_names = train_model(df)
-    st.success(f"✅ 모델 학습 완료! (모델 정확도: {accuracy:.2f})")
-except FileNotFoundError:
-    st.error("❌ 'earthquake_data_tsunami.csv' 파일을 찾을 수 없습니다. 같은 폴더에 파일을 넣어주세요.")
-    st.stop()
+df = load_data()
+model, accuracy, feature_names = train_model(df)
+st.success(f"✅ 모델 학습 완료! (모델 정확도: {accuracy:.2f})")
 
 st.divider()
 
 # -----------------------------------------------------------------------------
-# 3. 사이드바: 사용자 입력 (슬라이더)
+# 4. 사이드바: 사용자 입력 (슬라이더)
 # -----------------------------------------------------------------------------
 st.sidebar.header("🌍 지진 정보 입력")
 st.sidebar.write("지진 정보를 슬라이더로 조절하세요.")
 
-# 슬라이더 설정 (데이터의 대략적인 최소/최대값 범위를 기반으로 설정)
-magnitude = st.sidebar.slider("지진 규모 (Magnitude)", min_value=0.0, max_value=10.0, value=6.0, step=0.1)
-depth = st.sidebar.slider("깊이 (Depth, km)", min_value=0, max_value=700, value=50, step=1)
-latitude = st.sidebar.slider("위도 (Latitude)", min_value=-90.0, max_value=90.0, value=36.5, step=0.1)
-longitude = st.sidebar.slider("경도 (Longitude)", min_value=-180.0, max_value=180.0, value=127.5, step=0.1)
+# 데이터프레임의 min/max 값을 기반으로 슬라이더 범위 설정
+magnitude_min, magnitude_max = df['magnitude'].min(), df['magnitude'].max()
+depth_min, depth_max = df['depth'].min(), df['depth'].max()
+latitude_min, latitude_max = df['latitude'].min(), df['latitude'].max()
+longitude_min, longitude_max = df['longitude'].min(), df['longitude'].max()
+
+# 슬라이더 설정
+magnitude = st.sidebar.slider("지진 규모 (Magnitude)", 
+                              min_value=magnitude_min, max_value=magnitude_max, 
+                              value=min(6.0, magnitude_max), step=0.1)
+depth = st.sidebar.slider("깊이 (Depth, km)", 
+                          min_value=int(depth_min), max_value=int(depth_max), 
+                          value=min(50, int(depth_max)), step=1)
+latitude = st.sidebar.slider("위도 (Latitude)", 
+                             min_value=latitude_min, max_value=latitude_max, 
+                             value=np.mean([latitude_min, latitude_max]), step=0.1)
+longitude = st.sidebar.slider("경도 (Longitude)", 
+                              min_value=longitude_min, max_value=longitude_max, 
+                              value=np.mean([longitude_min, longitude_max]), step=0.1)
 
 # 입력 데이터를 데이터프레임으로 변환
 input_data = pd.DataFrame({
@@ -77,18 +105,19 @@ input_data = pd.DataFrame({
 })
 
 # -----------------------------------------------------------------------------
-# 4. 메인 화면: 예측 및 시각화
+# 5. 메인 화면: 예측 및 시각화
 # -----------------------------------------------------------------------------
 
-# 4-1. 입력 위치 지도 표시
+# 5-1. 입력 위치 지도 표시
 st.subheader("📍 지진 발생 위치")
 st.map(input_data)
 
-# 4-2. 예측하기 버튼 및 결과 출력
+# 5-2. 예측하기 버튼 및 결과 출력
 if st.button("🚨 쓰나미 발생 예측하기", type="primary"):
     with st.spinner('예측 중입니다...'):
         prediction = model.predict(input_data)[0]
-        probability = model.predict_proba(input_data)[0][1] # 쓰나미일 확률 (클래스 1)
+        # 쓰나미 발생 확률 (클래스 1)
+        probability = model.predict_proba(input_data)[0][1] 
 
     st.subheader("예측 결과")
     
@@ -99,11 +128,14 @@ if st.button("🚨 쓰나미 발생 예측하기", type="primary"):
         st.success(f"✅ **안전: 쓰나미 발생 확률이 낮습니다.** (확률: {probability*100:.1f}%)")
         st.write("지진 피해 상황을 주시하세요.")
 
-# 4-3. 중요 변수 시각화 (기존 코드의 STEP 7 활용)
+# 5-3. 중요 변수 시각화
 with st.expander("📊 모델이 중요하게 생각하는 특성 보기"):
     fig, ax = plt.subplots()
     importances = model.feature_importances_
+    
+    # 한글 제목/라벨 적용
     ax.bar(feature_names, importances, color='skyblue')
     ax.set_title("Feature Importance (특성이 쓰나미 예측에 미치는 영향)")
     ax.set_ylabel("중요도")
+    
     st.pyplot(fig)
